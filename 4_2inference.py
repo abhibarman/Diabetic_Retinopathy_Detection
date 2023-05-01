@@ -59,7 +59,6 @@ df.to_csv('model_inference.csv', index=False)
 
 masker = shap.maskers.Image('inpaint_telea',x_val[0].shape)
 explainer = shap.Explainer(model, masker)
-
 # here we use 500 evaluations of the underlying model to estimate the SHAP values
 shap_values = explainer(x_val, max_evals=500)
 shap.image_plot(shap_values)

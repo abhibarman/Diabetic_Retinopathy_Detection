@@ -4,12 +4,21 @@ from clearml import Model
 from keras.models import load_model
 from utility import preprocess_image, OptimizedRounder
 import numpy as np
+from keras.utils import load_img, img_to_array
+from keras.applications.efficientnet_v2 import preprocess_input
+import shap
+from lime import lime_image
+import matplotlib.pyplot as plt
+from skimage.segmentation import mark_boundaries
+from utility import mapping
 
 st.set_page_config(
     page_title="Diabetic Retinopathy Detection App",
     page_icon=":eye:",
     layout="centered"
 )
+st.set_option('deprecation.showfileUploaderEncoding', False)
+st.set_option('deprecation.showPyplotGlobalUse', False)
 st.markdown(
     """
     <style>
@@ -22,10 +31,12 @@ st.markdown(
 )
 # Set the title of the app
 st.title('Diabetic Retinopathy Detection')
-
+#show metrics 
+show_metrics_on_load = True
 
 def load_keras_model(model_id="48a76b1277154398991d1d079db968ae"):
      model_path = Model(model_id="48a76b1277154398991d1d079db968ae").get_local_copy()
+     print(f'model_path {model_path}')
      model = load_model(model_path)
      return model
 
@@ -39,6 +50,60 @@ def predict(img_path):
      data = process_image(img_path)
      pred = model.predict(data)
      return pred
+
+def explain_prediction(file_path):
+     name = file_path.split('/')[-1].split('.')[0]
+     model_path = Model(model_id="48a76b1277154398991d1d079db968ae").get_local_copy()
+     model = load_model(model_path)
+     image_path = file_path
+     x_val = np.empty((1, 224, 224, 3), dtype=np.uint8)
+     img = load_img(image_path, target_size=(224, 224))
+     img_array = img_to_array(img)
+     img_array = preprocess_input(img_array)
+
+     prediction = model.predict(x_val)
+     print(f'Model Prediction: {prediction}')
+
+     optR = OptimizedRounder()
+     coefficients = [0.49964604, 1.55479703, 2.4369177,  3.26701671] # Learnt while training the efficient net model.
+     print(f'Coefficients: {coefficients}')
+     prediction = optR.predict(prediction, coefficients)
+     #print('Optirmized Prediction :{y_val_pred}')
+     print(prediction)
+
+     x_val[0,:,:,:] = img_array
+
+     explainer = lime_image.LimeImageExplainer()
+     explanation = explainer.explain_instance(x_val[0], model.predict, top_labels=1, hide_color=0, num_samples=1000)
+     temp, mask = explanation.get_image_and_mask(0, positive_only=False, num_features=10, hide_rest=False)
+     fig, axe = plt.subplots(figsize=(7, 3.5))
+     plt.imshow(mark_boundaries(temp / 2 + 0.5, mask))
+     #axe.text(180, 190, 'Predicted:'+mapping.get(int(prediction[0].item())), bbox=dict(facecolor='red', alpha=0.0))
+     plt.show()
+     name += '_lime.png'
+     fig.savefig(name)
+   
+
+     #
+     mapping = {0:'No DR',1:'Mild',2:'Moderate',3:'Severe',4:'Proliferative DR'} 
+     #masker = shap.maskers.Image("inpaint_telea", demo_x_val[0].shape)
+     #explainer = shap.Explainer(model, masker, output_names=list(mapping.keys()))
+     #shap_values = explainer(demo_x_val[0:], max_evals=500, batch_size=50, outputs=shap.Explanation.argsort.flip[:1])
+     #
+     masker = shap.maskers.Image('inpaint_telea',x_val[0].shape)
+     explainer = shap.Explainer(model, masker,output_names=list(mapping.keys()))
+
+     # here we use 500 evaluations of the underlying model to estimate the SHAP values
+     shap_values = explainer(x_val, max_evals=1000, batch_size=50, outputs=shap.Explanation.argsort.flip[:1])
+     #shap.image_plot(shap_values, x_val)
+     shap.image_plot(shap_values[0])
+     st.pyplot()
+     #print(shap_values.shape)
+     #return shap_values
+
+     
+     return name
+
      
 
 
@@ -94,8 +159,9 @@ button_css = """
     </style>
 """
 st.markdown(button_css, unsafe_allow_html=True)
-
+button_clicked = False
 with st.spinner('Detecting Retinopathy.........'):
+    show_metrics_on_load = False
     if button:
         # Check if image uploaded
         if uploaded_file is not None:
@@ -131,11 +197,28 @@ with st.spinner('Detecting Retinopathy.........'):
             # Your code here
         else:
             st.warning("Please upload an image first.")
+        
+        if uploaded_file is not None:
+             button_clicked = True
 
+
+if uploaded_file is not None:
+     if button_clicked:
+          with st.spinner('Generating Explanation.........'):          
+            print(f'file_path {file_path}')
+            img_path = explain_prediction(file_path)
+            image = Image.open(img_path)
+            st.image(image, caption='Lime Explanation', width=500)
+          
+
+
+
+st.write("<div style='height: 50px;'></div>", unsafe_allow_html=True)
 col1,col2 =st.columns(2)
-with col1:
-        cmatrix = Image.open("resources/confusion_matrix_Binary.png")
-        st.image(cmatrix, caption='Binary Confusion Matrix', width=350)
-with col2:
-        roc = Image.open("resources/ROC_AUC.png")
-        st.image(roc, caption='ROC-AUC Curve', width=350,)
+if show_metrics_on_load:     
+    with col1:
+            cmatrix = Image.open("resources/confusion_matrix_Binary.png")
+            st.image(cmatrix, caption='Binary Confusion Matrix', width=350)
+    with col2:
+            roc = Image.open("resources/ROC_AUC.png")
+            st.image(roc, caption='ROC-AUC Curve', width=350,)
